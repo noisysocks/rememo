@@ -12,24 +12,13 @@
  */
 
 /**
- * Internal cache entry.
- *
- * @typedef CacheNode
- *
- * @property {?CacheNode|undefined} [prev] Previous node.
- * @property {?CacheNode|undefined} [next] Next node.
- * @property {*[]} args Function arguments for cache entry.
- * @property {*} val Function result.
- */
-
-/**
  * @typedef Cache
  *
  * @property {Clear} clear Function to clear cache.
  * @property {boolean} [isUniqueByDependants] Whether dependants are valid in
  * considering cache uniqueness. A cache is unique if dependents are all arrays
  * or objects.
- * @property {CacheNode?} [head] Cache head.
+ * @property {Map<*,*>} map Cache map.
  * @property {*[]} [lastDependants] Dependants from previous invocation.
  */
 
@@ -73,8 +62,9 @@ function isObjectLike(value) {
 function createCache() {
 	/** @type {Cache} */
 	var cache = {
+		map: new Map(),
 		clear: function () {
-			cache.head = null;
+			cache.map = new Map();
 		},
 	};
 
@@ -207,10 +197,11 @@ export default function (selector, getDependants) {
 	function callSelector(/* source, ...extraArgs */) {
 		var len = arguments.length,
 			cache,
-			node,
 			i,
 			args,
-			dependants;
+			dependants,
+			map,
+			newMap;
 
 		// Create copy of arguments (avoid leaking deoptimization).
 		args = new Array(len);
@@ -235,57 +226,23 @@ export default function (selector, getDependants) {
 			cache.lastDependants = dependants;
 		}
 
-		node = cache.head;
-		while (node) {
-			// Check whether node arguments match arguments
-			if (!isShallowEqual(node.args, args, 1)) {
-				node = node.next;
-				continue;
+		map = cache.map;
+
+		for (i = 1; i < len; i++) {
+			if (map.has(args[i])) {
+				map = map.get(args[i]);
+			} else {
+				newMap = new Map();
+				map.set(args[i], newMap);
+				map = newMap;
 			}
-
-			// At this point we can assume we've found a match
-
-			// Surface matched node to head if not already
-			if (node !== cache.head) {
-				// Adjust siblings to point to each other.
-				/** @type {CacheNode} */ (node.prev).next = node.next;
-				if (node.next) {
-					node.next.prev = node.prev;
-				}
-
-				node.next = cache.head;
-				node.prev = null;
-				/** @type {CacheNode} */ (cache.head).prev = node;
-				cache.head = node;
-			}
-
-			// Return immediately
-			return node.val;
 		}
 
-		// No cached value found. Continue to insertion phase:
-
-		node = /** @type {CacheNode} */ ({
-			// Generate the result from original function
-			val: selector.apply(null, args),
-		});
-
-		// Avoid including the source object in the cache.
-		args[0] = null;
-		node.args = args;
-
-		// Don't need to check whether node is already head, since it would
-		// have been returned above already if it was
-
-		// Shift existing head down list
-		if (cache.head) {
-			cache.head.prev = node;
-			node.next = cache.head;
+		if (!map.has(LEAF_KEY)) {
+			map.set(LEAF_KEY, selector.apply(null, args));
 		}
 
-		cache.head = node;
-
-		return node.val;
+		return map.get(LEAF_KEY);
 	}
 
 	callSelector.getDependants = normalizedGetDependants;
